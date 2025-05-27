@@ -101,31 +101,14 @@ class SQLTranslator:
         self.data[table_name] = []
         return f"创建表 {table_name} 成功"
 
-    def validate_type(self, value, type_str):
-        """验证值是否符合指定的类型"""
-        type_str = type_str.upper()
-        try:
-            if 'INT' in type_str:
-                int(value)
-                return True
-            elif 'VARCHAR' in type_str or 'CHAR' in type_str:
-                return True  # 字符串类型可以接受任何值
-            elif 'DECIMAL' in type_str or 'FLOAT' in type_str or 'DOUBLE' in type_str:
-                float(value)
-                return True
-            elif 'BOOLEAN' in type_str:
-                return value.upper() in ['TRUE', 'FALSE', '1', '0']
-            return True  # 默认返回True，表示类型检查通过
-        except ValueError:
-            return False
-
     def parse_insert(self, sql):
         """解析INSERT语句"""
         parts = sql.split('VALUES')
         table_name = parts[0].split()[2].strip()
         # 先去除所有空格，再去除括号，最后分割
         values = parts[1].strip().strip('()').split(',')
-        values = [v.strip().strip("'") for v in values]
+        # 只去除空格，保留引号
+        values = [v.strip() for v in values]
 
         if table_name not in self.data:
             return f"表 {table_name} 不存在"
@@ -140,9 +123,31 @@ class SQLTranslator:
 
         # 检查每个值的类型
         for i, (value, type_str) in enumerate(zip(values, col_types)):
-            if not self.validate_type(value, type_str):
-                return f"错误：第{i+1}列的值 '{value}' 与类型 {type_str} 不匹配"
+            # 检查是否带有引号
+            has_quotes = value.startswith("'") and value.endswith("'")
+            # 去除引号用于类型检查
+            value_without_quotes = value.strip("'")
+            
+            if 'INT' in type_str.upper():
+                if has_quotes:
+                    return f"错误：第{i+1}列的值 '{value}' 不应该使用引号，因为它是INT类型"
+                try:
+                    int(value_without_quotes)
+                except ValueError:
+                    return f"错误：第{i+1}列的值 '{value}' 不是有效的整数"
+            elif 'VARCHAR' in type_str.upper() or 'CHAR' in type_str.upper():
+                if not has_quotes:
+                    return f"错误：第{i+1}列的值 {value} 应该使用引号，因为它是字符串类型"
+            elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
+                if has_quotes:
+                    return f"错误：第{i+1}列的值 '{value}' 不应该使用引号，因为它是数值类型"
+                try:
+                    float(value_without_quotes)
+                except ValueError:
+                    return f"错误：第{i+1}列的值 '{value}' 不是有效的数值"
 
+        # 存储时去除引号
+        values = [v.strip("'") for v in values]
         self.data[table_name].append(values)
         return f"向表 {table_name} 插入数据成功"
 
@@ -178,6 +183,7 @@ class SQLTranslator:
             return f"表 {table_name} 不存在"
 
         col_names = list(self.tables[table_name].keys())
+        col_types = list(self.tables[table_name].values())
         result = self.data[table_name]
 
         if 'WHERE' in sql:
@@ -190,13 +196,34 @@ class SQLTranslator:
         if columns != '*':
             selected_cols = [col.strip() for col in columns.split(',')]
             col_indices = []
+            selected_types = []
             for col in selected_cols:
                 idx = self.get_column_index(col_names, col)
                 if idx != -1:
                     col_indices.append(idx)
+                    selected_types.append(col_types[idx])
             result = [[row[i] for i in col_indices] for row in result]
+            col_types = selected_types
+        else:
+            col_types = list(self.tables[table_name].values())
 
-        return result
+        # 根据列类型转换数据
+        formatted_result = []
+        for row in result:
+            formatted_row = []
+            for value, type_str in zip(row, col_types):
+                if 'INT' in type_str.upper():
+                    # 整数类型转换为int
+                    formatted_row.append(int(value))
+                elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
+                    # 浮点数类型转换为float
+                    formatted_row.append(float(value))
+                else:
+                    # 字符串类型保持原样
+                    formatted_row.append(value)
+            formatted_result.append(formatted_row)
+
+        return formatted_result
 
     def parse_update(self, sql):
         """解析UPDATE语句"""
