@@ -194,48 +194,121 @@ class SelectOperation(BaseOperation):
         """解析SELECT语句"""
         parts = sql.split('FROM')
         columns = parts[0].split()[1].strip()
-        table_info = parts[1].split('WHERE')
-        table_name = table_info[0].strip()
+        
+        # 处理FROM子句，需要考虑可能存在的WHERE和ORDER BY
+        from_part = parts[1]
+        table_part = from_part.split('WHERE')[0] if 'WHERE' in from_part else (from_part.split('ORDER BY')[0] if 'ORDER BY' in from_part else from_part)
+        table_name = table_part.strip()
 
         if table_name not in self.data:
             return f"表 {table_name} 不存在"
 
         col_names = list(self.tables[table_name].keys())
         col_types = list(self.tables[table_name].values())
-        result = self.data[table_name]
+        result = self.data[table_name].copy()  # 使用拷贝避免修改原始数据
 
-        if 'WHERE' in sql:
-            condition = table_info[1].strip()
+        # 处理WHERE条件
+        if 'WHERE' in from_part:
+            where_part = from_part.split('WHERE')[1]
+            condition = where_part.split('ORDER BY')[0].strip() if 'ORDER BY' in where_part else where_part.strip()
             result = [
                 row for row in result
                 if self.evaluate_condition(row, col_names, condition)
             ]
 
-        if columns != '*':
+        # 处理列选择
+        selected_col_indices = []
+        selected_col_names = []
+        selected_types = []
+        
+        if columns == '*':
+            selected_col_indices = list(range(len(col_names)))
+            selected_col_names = col_names
+            selected_types = col_types
+        else:
             selected_cols = [col.strip() for col in columns.split(',')]
-            col_indices = []
-            selected_types = []
             for col in selected_cols:
                 idx = self.get_column_index(col_names, col)
                 if idx != -1:
-                    col_indices.append(idx)
+                    selected_col_indices.append(idx)
+                    selected_col_names.append(col_names[idx])
                     selected_types.append(col_types[idx])
-            result = [[row[i] for i in col_indices] for row in result]
+            
+            result = [[row[i] for i in selected_col_indices] for row in result]
+            col_names = selected_col_names
             col_types = selected_types
-        else:
-            col_types = list(self.tables[table_name].values())
+
+        # 处理ORDER BY子句
+        if 'ORDER BY' in sql.upper():
+            order_by_part = sql.upper().split('ORDER BY')[1].strip()
+            order_cols = []
+            desc_flags = []
+            
+            # 解析ORDER BY子句中的列和排序方向
+            for col_spec in order_by_part.split(','):
+                col_spec = col_spec.strip()
+                if ' DESC' in col_spec:
+                    col_name = col_spec.replace(' DESC', '').strip()
+                    desc = True
+                else:
+                    col_name = col_spec.replace(' ASC', '').strip()  # ASC是默认的，可以省略
+                    desc = False
+                
+                # 找到列在当前结果集中的索引
+                if columns == '*':
+                    col_index = self.get_column_index(col_names, col_name)
+                else:
+                    col_index = selected_col_names.index(col_name) if col_name in selected_col_names else -1
+                
+                if col_index != -1:
+                    order_cols.append(col_index)
+                    desc_flags.append(desc)
+            
+            # 如果有有效的排序列，执行排序
+            if order_cols:
+                # 多级排序，从最后一个指定的列开始排
+                for i in range(len(order_cols) - 1, -1, -1):
+                    col_idx = order_cols[i]
+                    is_desc = desc_flags[i]
+                    
+                    # 确定数据类型以进行正确比较
+                    if columns == '*':
+                        col_type = col_types[col_idx]
+                    else:
+                        col_type = selected_types[col_idx]
+                    
+                    # 根据数据类型进行排序
+                    # 数值类型需要转换为数值再比较，字符串类型直接比较
+                    if 'INT' in col_type.upper() or 'DECIMAL' in col_type.upper() or 'FLOAT' in col_type.upper() or 'DOUBLE' in col_type.upper():
+                        def get_numeric_value(value):
+                            try:
+                                return float(value)
+                            except (ValueError, TypeError):
+                                return 0  # 对于无法转换的值，返回0
+                        
+                        result.sort(key=lambda row: get_numeric_value(row[col_idx]), reverse=is_desc)
+                    else:
+                        # 字符串排序
+                        result.sort(key=lambda row: str(row[col_idx]).lower(), reverse=is_desc)
 
         # 根据列类型转换数据
         formatted_result = []
         for row in result:
             formatted_row = []
-            for value, type_str in zip(row, col_types):
+            for i, value in enumerate(row):
+                type_str = col_types[i]
                 if 'INT' in type_str.upper():
                     # 整数类型转换为int
-                    formatted_row.append(int(value))
+                    try:
+                        formatted_row.append(int(value))
+                    except (ValueError, TypeError):
+                        formatted_row.append(value)  # 如果无法转换，保持原样
                 elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
                     # 浮点数类型转换为float
-                    formatted_row.append(float(value))
+                    try:
+                        formatted_row.append(float(value))
+                    except (ValueError, TypeError):
+                        formatted_row.append(value)  # 如果无法转换，保持原样
                 else:
                     # 字符串类型保持原样
                     formatted_row.append(value)
@@ -345,4 +418,5 @@ class ShowTablesOperation(BaseOperation):
     
     def execute(self, sql):
         """解析SHOW TABLES语句"""
-        return list(self.tables.keys()) 
+        # 返回列表的列表格式，每个表名作为一个单独的行
+        return [[table_name] for table_name in self.tables.keys()] 

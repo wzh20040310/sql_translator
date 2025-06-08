@@ -12,12 +12,33 @@ class SQLResultDisplay:
             
         table = PrettyTable()
         
+        # 确保每行数据都有相同的长度
         if headers:
+            # 使用提供的表头
             table.field_names = headers
+            
+            # 检查每行数据是否匹配表头数量，如果不匹配则进行调整
+            for i in range(len(data)):
+                row = data[i]
+                # 如果行数据短于表头，添加空字符串补齐
+                if len(row) < len(headers):
+                    data[i] = row + [''] * (len(headers) - len(row))
+                # 如果行数据长于表头，截断多余的数据
+                elif len(row) > len(headers):
+                    data[i] = row[:len(headers)]
         else:
-            # 如果没有提供表头，使用列索引作为表头
-            table.field_names = [f"Column_{i}" for i in range(len(data[0]))]
+            # 如果没有提供表头，使用第一行数据的长度确定列数
+            max_cols = max([len(row) for row in data]) if data else 0
+            # 使用列索引作为表头
+            table.field_names = [f"Column_{i}" for i in range(max_cols)]
+            
+            # 统一每行数据的长度
+            for i in range(len(data)):
+                row = data[i]
+                if len(row) < max_cols:
+                    data[i] = row + [''] * (max_cols - len(row))
         
+        # 添加数据行
         for row in data:
             table.add_row(row)
             
@@ -47,7 +68,11 @@ class SQLResultDisplay:
         table.field_names = ["Table Name"]
         
         for table_name in tables:
-            table.add_row([table_name])
+            if isinstance(table_name, str):
+                table.add_row([table_name])
+            else:
+                # 处理非字符串类的表名
+                table.add_row([str(table_name)])
             
         return str(table)
     

@@ -25,22 +25,56 @@ class SQLExecutor:
     
     def execute_sql(self, sql):
         """执行单条SQL语句"""
+        # 处理SQL语句末尾的分号
+        if sql.strip().endswith(';'):
+            sql = sql.strip()[:-1]  # 去掉末尾的分号
+            
         parsed = self.parser.parse_sql(sql)
         operation_type = parsed['type']
         
-        if operation_type in self.operations:
+        if operation_type == 'COMMENT':
+            # 对于纯注释语句，直接返回注释内容但不执行
+            return f"注释: {parsed['original']}"
+        elif operation_type in self.operations:
             return self.operations[operation_type].execute(parsed['content'])
         else:
-            return "不支持的SQL语句"
+            return f"不支持的SQL语句: {parsed['original']}"
     
     def execute_batch(self, sql_batch):
         """执行批量SQL语句"""
         results = []
-        statements = [stmt.strip() for stmt in sql_batch.split(';') if stmt.strip()]
+        # 按分号分割SQL语句，并过滤掉空语句
+        statements = []
+        current_stmt = ""
+        in_string = False
+        string_quote = None
+        
+        # 更智能地分割SQL语句，考虑字符串中的分号和注释
+        for i, char in enumerate(sql_batch):
+            if char in ["'", '"'] and (i == 0 or sql_batch[i-1] != '\\'):
+                if not in_string:
+                    in_string = True
+                    string_quote = char
+                elif char == string_quote:
+                    in_string = False
+                current_stmt += char
+            elif char == ';' and not in_string:
+                # 遇到分号时，添加当前语句（除非是空的）
+                if current_stmt.strip():
+                    statements.append(current_stmt.strip())
+                current_stmt = ""
+            else:
+                current_stmt += char
+        
+        # 添加最后一个语句（如果不为空）
+        if current_stmt.strip():
+            statements.append(current_stmt.strip())
         
         for sql in statements:
-            result = self.execute_sql(sql)
-            results.append(result)
+            # 确保语句不为空
+            if sql.strip():
+                result = self.execute_sql(sql)
+                results.append(result)
         
         return results
     

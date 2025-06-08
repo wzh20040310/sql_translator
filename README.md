@@ -18,6 +18,7 @@
 - 支持交互模式和批处理模式
 - 支持从文件读取SQL语句
 - 使用PrettyTable美化输出结果
+- **提供图形用户界面，类似数据库IDE**
 
 ## 安装
 
@@ -33,6 +34,15 @@ pip install -r requirements.txt
 ```
 
 ## 使用方法
+
+### 图形用户界面
+
+1. 启动GUI应用：
+```bash
+python run_gui.py
+```
+
+2. 在界面中输入SQL语句并点击"执行"按钮
 
 ### 命令行工具
 
@@ -131,10 +141,12 @@ sql_translator/
 ├── cli/                 # 命令行界面
 │   ├── __init__.py
 │   └── main.py         # 命令行入口
+├── gui_app.py          # 图形用户界面
 ├── tests/              # 测试用例
 ├── examples/           # 示例代码
 ├── __init__.py
 ├── requirements.txt    # 项目依赖
+├── run_gui.py          # GUI启动脚本
 └── README.md          # 项目说明
 ```
 

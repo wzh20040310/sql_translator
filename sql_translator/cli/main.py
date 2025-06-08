@@ -35,7 +35,7 @@ def interactive_mode():
     print("6. ALTER TABLE")
     print("7. DROP TABLE")
     print("8. SHOW TABLES")
-    print()
+    print("9. OEDER BY")
     
     while True:
         try:
