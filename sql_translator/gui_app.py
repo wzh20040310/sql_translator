@@ -108,12 +108,21 @@ class SQLTranslatorGUI:
             "",
             "-- 创建表示例:",
             "CREATE TABLE users (id INT, name VARCHAR(50), age INT, email VARCHAR(100));",
+            "CREATE TABLE orders (id INT, name VARCHAR(50));",
             "",
             "-- 插入数据示例:",
             "INSERT INTO users VALUES (1, 'Zhang San', 25, 'zhangsan@example.com');",
+            "INSERT INTO users VALUES (2, 'Li Si', 30, 'lisi@example.com');",
+            "INSERT INTO users VALUES (3, 'Wang Wu', 28, 'wangwu@example.com');",
+            "INSERT INTO orders VALUES (1, 'wine');",
+            "INSERT INTO orders VALUES (2, 'beer');",
+            "INSERT INTO orders VALUES (3, 'wine');",
             "",
             "-- 查询数据示例:",
             "SELECT * FROM users WHERE age > 20;",
+            "SELECT * FROM users WHERE age > 20 ORDER BY age;",
+            "SELECT * FROM orders join users on orders.id = users.id;",
+            
         ]
         self.sql_input.insert(tk.INSERT, '\n'.join(examples))
 
@@ -171,14 +180,8 @@ class SQLTranslatorGUI:
             for i, result in enumerate(results):
                 if i > 0:
                     self.result_text.insert(tk.INSERT, "\n\n" + "-" * 50 + "\n\n")
-                
-                if isinstance(result, str) and result.startswith("注释:"):
-                    # 注释结果用蓝色显示
-                    self.result_text.insert(tk.INSERT, result)
-                    self.highlight_comment(result)
-                else:
-                    # 其他结果
-                    self.result_text.insert(tk.INSERT, str(result))
+                # 统一用display_result美化输出
+                self.display_result(result, "")
             
             # 更新表格列表
             self.refresh_tables()
@@ -204,22 +207,21 @@ class SQLTranslatorGUI:
                 from_index = words.index("FROM")
                 if from_index + 1 < len(words):
                     table_name = words[from_index + 1].strip().rstrip(';')
-            
+
+            # 优先用表结构，否则自动生成表头
+            headers = None
             if table_name:
                 table_structure = self.executor.get_table_structure(table_name)
-                if table_structure:
-                    # 创建PrettyTable实例
-                    pt = PrettyTable()
-                    pt.field_names = list(table_structure.keys())
-                    
-                    for row in result:
-                        pt.add_row(row)
-                    
-                    self.result_text.insert(tk.INSERT, str(pt))
-                else:
-                    self.result_text.insert(tk.INSERT, str(result))
-            else:
-                self.result_text.insert(tk.INSERT, str(result))
+                if table_structure and len(table_structure) == len(result[0]):
+                    headers = list(table_structure.keys())
+            if not headers:
+                headers = [f"col{i+1}" for i in range(len(result[0]))]
+
+            pt = PrettyTable()
+            pt.field_names = headers
+            for row in result:
+                pt.add_row(row)
+            self.result_text.insert(tk.INSERT, str(pt))
         else:
             # 结果是文本
             self.result_text.insert(tk.INSERT, str(result))

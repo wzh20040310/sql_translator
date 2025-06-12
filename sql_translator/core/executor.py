@@ -30,6 +30,7 @@ class SQLExecutor:
             sql = sql.strip()[:-1]  # 去掉末尾的分号
             
         parsed = self.parser.parse_sql(sql)
+        print(parsed)
         operation_type = parsed['type']
         
         if operation_type == 'COMMENT':

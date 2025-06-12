@@ -1,16 +1,16 @@
 class BaseOperation:
     """SQL操作的基类"""
-    
+
     def __init__(self, tables, data):
         self.tables = tables
         self.data = data
-    
+
     def parse_condition(self, condition):
         """解析WHERE条件"""
         operators = ['=', '>', '<', '>=', '<=', '!=']
         for op in operators:
             if op in condition:
-                col, value = condition.split(op)
+                col, value = condition.split(op, 1)  # 只分割第一个
                 col = col.strip()
                 value = value.strip().strip("'")
                 return col, op, value
@@ -33,7 +33,14 @@ class BaseOperation:
         if not col or not op:
             return True
 
-        col_index = self.get_column_index(col_names, col)
+        # 处理带表名的列（table.column）
+        if '.' in col:
+            table_name, col_name = col.split('.', 1)
+            # 在多表查询中，需要特殊处理
+            col_index = self.get_column_index(col_names, col_name)
+        else:
+            col_index = self.get_column_index(col_names, col)
+
         if col_index == -1:
             return True
 
@@ -63,7 +70,7 @@ class BaseOperation:
 
 class CreateTableOperation(BaseOperation):
     """CREATE TABLE操作实现"""
-    
+
     def execute(self, sql):
         """解析CREATE TABLE语句"""
         # 首先找到表名
@@ -110,7 +117,7 @@ class CreateTableOperation(BaseOperation):
 
 class InsertOperation(BaseOperation):
     """INSERT操作实现"""
-    
+
     def execute(self, sql):
         """解析INSERT语句"""
         parts = sql.split('VALUES')
@@ -126,7 +133,7 @@ class InsertOperation(BaseOperation):
         # 获取表结构
         table_structure = self.tables[table_name]
         col_types = list(table_structure.values())
-        
+
         # 检查值的数量是否匹配列数
         if len(values) != len(col_types):
             return f"错误：值的数量({len(values)})与列数({len(col_types)})不匹配"
@@ -137,24 +144,24 @@ class InsertOperation(BaseOperation):
             has_quotes = value.startswith("'") and value.endswith("'")
             # 去除引号用于类型检查
             value_without_quotes = value.strip("'")
-            
+
             if 'INT' in type_str.upper():
                 if has_quotes:
-                    return f"错误：第{i+1}列的值 '{value}' 不应该使用引号，因为它是INT类型"
+                    return f"错误：第{i + 1}列的值 '{value}' 不应该使用引号，因为它是INT类型"
                 try:
                     int(value_without_quotes)
                 except ValueError:
-                    return f"错误：第{i+1}列的值 '{value}' 不是有效的整数"
+                    return f"错误：第{i + 1}列的值 '{value}' 不是有效的整数"
             elif 'VARCHAR' in type_str.upper() or 'CHAR' in type_str.upper():
                 if not has_quotes:
-                    return f"错误：第{i+1}列的值 {value} 应该使用引号，因为它是字符串类型"
+                    return f"错误：第{i + 1}列的值 {value} 应该使用引号，因为它是字符串类型"
             elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
                 if has_quotes:
-                    return f"错误：第{i+1}列的值 '{value}' 不应该使用引号，因为它是数值类型"
+                    return f"错误：第{i + 1}列的值 '{value}' 不应该使用引号，因为它是数值类型"
                 try:
                     float(value_without_quotes)
                 except ValueError:
-                    return f"错误：第{i+1}列的值 '{value}' 不是有效的数值"
+                    return f"错误：第{i + 1}列的值 '{value}' 不是有效的数值"
 
         # 存储时去除引号
         values = [v.strip("'") for v in values]
@@ -164,7 +171,7 @@ class InsertOperation(BaseOperation):
 
 class DeleteOperation(BaseOperation):
     """DELETE操作实现"""
-    
+
     def execute(self, sql):
         """解析DELETE语句"""
         parts = sql.split('WHERE')
@@ -189,128 +196,317 @@ class DeleteOperation(BaseOperation):
 
 class SelectOperation(BaseOperation):
     """SELECT操作实现"""
-    
+
     def execute(self, sql):
         """解析SELECT语句"""
-        parts = sql.split('FROM')
-        columns = parts[0].split()[1].strip()
-        
-        # 处理FROM子句，需要考虑可能存在的WHERE和ORDER BY
-        from_part = parts[1]
-        table_part = from_part.split('WHERE')[0] if 'WHERE' in from_part else (from_part.split('ORDER BY')[0] if 'ORDER BY' in from_part else from_part)
-        table_name = table_part.strip()
+        sql = sql.strip()
 
-        if table_name not in self.data:
-            return f"表 {table_name} 不存在"
+        # 使用更精确的方式分割SQL语句
+        parts = self.split_sql_parts(sql)
 
-        col_names = list(self.tables[table_name].keys())
-        col_types = list(self.tables[table_name].values())
-        result = self.data[table_name].copy()  # 使用拷贝避免修改原始数据
+        # 解析SELECT子句
+        select_part = parts.get('SELECT', '')
+        columns = select_part.strip()
+
+        # 解析FROM子句
+        from_part = parts.get('FROM', '')
+        if not from_part:
+            return "错误：缺少FROM子句"
+
+        # 解析WHERE子句
+        where_part = parts.get('WHERE', '')
+
+        # 解析ORDER BY子句
+        order_by_part = parts.get('ORDER BY', '')
+
+        # 解析表和JOIN
+        tables, join_conditions = self.parse_from_clause(from_part)
+
+        # 检查所有表是否存在
+        for table in tables:
+            if table not in self.data:
+                return f"表 {table} 不存在"
+
+        # 获取所有表的列名和类型
+        all_col_names = {}
+        all_col_types = {}
+        combined_col_names = []
+        combined_col_types = []
+
+        for table in tables:
+            table_cols = list(self.tables[table].keys())
+            table_types = list(self.tables[table].values())
+            all_col_names[table] = table_cols
+            all_col_types[table] = table_types
+            combined_col_names.extend(table_cols)
+            combined_col_types.extend(table_types)
+
+        # 执行JOIN操作
+        if len(tables) == 1:
+            # 单表查询
+            result = self.data[tables[0]].copy()
+        else:
+            # 多表JOIN
+            result = self.execute_joins(tables, join_conditions, all_col_names)
 
         # 处理WHERE条件
-        if 'WHERE' in from_part:
-            where_part = from_part.split('WHERE')[1]
-            condition = where_part.split('ORDER BY')[0].strip() if 'ORDER BY' in where_part else where_part.strip()
+        if where_part:
             result = [
                 row for row in result
-                if self.evaluate_condition(row, col_names, condition)
+                if self.evaluate_condition(row, combined_col_names, where_part)
             ]
 
         # 处理列选择
+        if columns == '*':
+            selected_result = result
+            selected_col_names = combined_col_names
+            selected_col_types = combined_col_types
+        else:
+            selected_result, selected_col_names, selected_col_types = self.select_columns(
+                result, columns, tables, all_col_names, all_col_types
+            )
+
+        # 处理ORDER BY
+        if order_by_part:
+            selected_result = self.apply_order_by(
+                selected_result, order_by_part, selected_col_names, selected_col_types
+            )
+
+        # 格式化结果
+        formatted_result = self.format_result(selected_result, selected_col_types)
+
+        return formatted_result
+
+    def split_sql_parts(self, sql):
+        """将SQL语句分割为各个子句"""
+        parts = {}
+        keywords = ['SELECT', 'FROM', 'WHERE', 'ORDER BY', 'GROUP BY', 'HAVING']
+
+        sql_upper = sql.upper()
+        positions = {}
+
+        # 找到所有关键字的位置
+        for keyword in keywords:
+            pos = sql_upper.find(keyword)
+            if pos != -1:
+                positions[keyword] = pos
+
+        # 按位置排序
+        sorted_positions = sorted(positions.items(), key=lambda x: x[1])
+
+        # 提取各部分
+        for i, (keyword, pos) in enumerate(sorted_positions):
+            start = pos + len(keyword)
+            if i + 1 < len(sorted_positions):
+                end = sorted_positions[i + 1][1]
+            else:
+                end = len(sql)
+
+            parts[keyword] = sql[start:end].strip()
+
+        return parts
+
+    def parse_from_clause(self, from_clause):
+        """解析FROM子句，提取表和JOIN条件"""
+        tables = []
+        join_conditions = []
+
+        # 简单的JOIN解析
+        parts = from_clause.split()
+        i = 0
+
+        while i < len(parts):
+            if parts[i].upper() not in ['JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'ON']:
+                # 这是一个表名
+                tables.append(parts[i])
+            elif parts[i].upper() == 'JOIN':
+                # 下一个应该是表名
+                if i + 1 < len(parts):
+                    tables.append(parts[i + 1])
+                    i += 1
+            elif parts[i].upper() == 'ON':
+                # 收集ON条件
+                condition_parts = []
+                i += 1
+                while i < len(parts) and parts[i].upper() not in ['JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL']:
+                    condition_parts.append(parts[i])
+                    i += 1
+                join_conditions.append(' '.join(condition_parts))
+                i -= 1  # 回退一步，因为外层循环会增加
+            i += 1
+
+        return tables, join_conditions
+
+    def execute_joins(self, tables, join_conditions, all_col_names):
+        """执行JOIN操作"""
+        result = self.data[tables[0]].copy()
+
+        for i, table in enumerate(tables[1:], 1):
+            new_result = []
+            for row1 in result:
+                for row2 in self.data[table]:
+                    # 检查JOIN条件
+                    if i - 1 < len(join_conditions):
+                        condition = join_conditions[i - 1]
+                        if self.evaluate_join_condition(row1, row2, tables[:i], [table], condition, all_col_names):
+                            new_result.append(row1 + row2)
+                    else:
+                        # 没有JOIN条件，执行笛卡尔积
+                        new_result.append(row1 + row2)
+            result = new_result
+
+        return result
+
+    def evaluate_join_condition(self, row1, row2, tables1, tables2, condition, all_col_names):
+        """评估JOIN条件"""
+        # 解析JOIN条件（例如：table1.column = table2.column）
+        parts = condition.split('=')
+        if len(parts) != 2:
+            return False
+
+        col1_spec = parts[0].strip()
+        col2_spec = parts[1].strip()
+
+        # 解析列规格（table.column）
+        table1_name, col1_name = self.parse_column_spec(col1_spec, tables1)
+        table2_name, col2_name = self.parse_column_spec(col2_spec, tables2)
+
+        if not table1_name or not table2_name:
+            return False
+
+        # 获取列索引
+        idx1 = self.get_column_index(all_col_names[table1_name], col1_name)
+        idx2 = self.get_column_index(all_col_names[table2_name], col2_name)
+
+        if idx1 == -1 or idx2 == -1:
+            return False
+
+        # 计算在合并行中的实际索引
+        offset1 = sum(len(all_col_names[t]) for t in tables1 if t != table1_name)
+        actual_idx1 = offset1 + idx1
+
+        # row2的索引就是idx2
+        actual_idx2 = idx2
+
+        # 比较值
+        return row1[actual_idx1] == row2[actual_idx2]
+
+    def parse_column_spec(self, col_spec, available_tables):
+        """解析列规格，返回表名和列名"""
+        if '.' in col_spec:
+            table_name, col_name = col_spec.split('.', 1)
+            if table_name in available_tables:
+                return table_name, col_name
+        else:
+            # 没有指定表名，在可用表中查找
+            for table in available_tables:
+                if col_spec in self.tables[table]:
+                    return table, col_spec
+
+        return None, None
+
+    def select_columns(self, result, columns, tables, all_col_names, all_col_types):
+        """选择指定的列"""
         selected_col_indices = []
         selected_col_names = []
-        selected_types = []
-        
-        if columns == '*':
-            selected_col_indices = list(range(len(col_names)))
-            selected_col_names = col_names
-            selected_types = col_types
-        else:
-            selected_cols = [col.strip() for col in columns.split(',')]
-            for col in selected_cols:
-                idx = self.get_column_index(col_names, col)
-                if idx != -1:
-                    selected_col_indices.append(idx)
-                    selected_col_names.append(col_names[idx])
-                    selected_types.append(col_types[idx])
-            
-            result = [[row[i] for i in selected_col_indices] for row in result]
-            col_names = selected_col_names
-            col_types = selected_types
+        selected_col_types = []
 
-        # 处理ORDER BY子句
-        if 'ORDER BY' in sql.upper():
-            order_by_part = sql.upper().split('ORDER BY')[1].strip()
-            order_cols = []
-            desc_flags = []
-            
-            # 解析ORDER BY子句中的列和排序方向
-            for col_spec in order_by_part.split(','):
-                col_spec = col_spec.strip()
-                if ' DESC' in col_spec:
-                    col_name = col_spec.replace(' DESC', '').strip()
-                    desc = True
-                else:
-                    col_name = col_spec.replace(' ASC', '').strip()  # ASC是默认的，可以省略
-                    desc = False
-                
-                # 找到列在当前结果集中的索引
-                if columns == '*':
-                    col_index = self.get_column_index(col_names, col_name)
-                else:
-                    col_index = selected_col_names.index(col_name) if col_name in selected_col_names else -1
-                
-                if col_index != -1:
-                    order_cols.append(col_index)
-                    desc_flags.append(desc)
-            
-            # 如果有有效的排序列，执行排序
-            if order_cols:
-                # 多级排序，从最后一个指定的列开始排
-                for i in range(len(order_cols) - 1, -1, -1):
-                    col_idx = order_cols[i]
-                    is_desc = desc_flags[i]
-                    
-                    # 确定数据类型以进行正确比较
-                    if columns == '*':
-                        col_type = col_types[col_idx]
-                    else:
-                        col_type = selected_types[col_idx]
-                    
-                    # 根据数据类型进行排序
-                    # 数值类型需要转换为数值再比较，字符串类型直接比较
-                    if 'INT' in col_type.upper() or 'DECIMAL' in col_type.upper() or 'FLOAT' in col_type.upper() or 'DOUBLE' in col_type.upper():
-                        def get_numeric_value(value):
-                            try:
-                                return float(value)
-                            except (ValueError, TypeError):
-                                return 0  # 对于无法转换的值，返回0
-                        
-                        result.sort(key=lambda row: get_numeric_value(row[col_idx]), reverse=is_desc)
-                    else:
-                        # 字符串排序
-                        result.sort(key=lambda row: str(row[col_idx]).lower(), reverse=is_desc)
+        selected_cols = [col.strip() for col in columns.split(',')]
 
-        # 根据列类型转换数据
+        for col in selected_cols:
+            if '.' in col:
+                # 带表名的列
+                table_name, col_name = col.split('.', 1)
+                if table_name in tables:
+                    idx = self.get_column_index(all_col_names[table_name], col_name)
+                    if idx != -1:
+                        # 计算在合并结果中的索引
+                        table_idx = tables.index(table_name)
+                        offset = sum(len(all_col_names[t]) for t in tables[:table_idx])
+                        selected_col_indices.append(offset + idx)
+                        selected_col_names.append(col)
+                        selected_col_types.append(all_col_types[table_name][idx])
+            else:
+                # 不带表名的列
+                found = False
+                for table in tables:
+                    idx = self.get_column_index(all_col_names[table], col)
+                    if idx != -1:
+                        table_idx = tables.index(table)
+                        offset = sum(len(all_col_names[t]) for t in tables[:table_idx])
+                        selected_col_indices.append(offset + idx)
+                        selected_col_names.append(col)
+                        selected_col_types.append(all_col_types[table][idx])
+                        found = True
+                        break
+                if not found:
+                    return [], [], [f"列 {col} 不存在"]
+
+        # 选择指定的列
+        selected_result = [[row[i] for i in selected_col_indices] for row in result]
+
+        return selected_result, selected_col_names, selected_col_types
+
+    def apply_order_by(self, result, order_by_part, col_names, col_types):
+        """应用ORDER BY排序"""
+        order_specs = []
+
+        # 解析ORDER BY子句
+        for col_spec in order_by_part.split(','):
+            col_spec = col_spec.strip()
+            if ' DESC' in col_spec.upper():
+                col_name = col_spec.upper().replace(' DESC', '').strip()
+                desc = True
+            else:
+                col_name = col_spec.upper().replace(' ASC', '').strip()
+                desc = False
+
+            # 找到列索引
+            col_idx = self.get_column_index(col_names, col_name)
+            if col_idx != -1:
+                order_specs.append((col_idx, desc))
+
+        # 执行排序
+        if order_specs:
+            for col_idx, is_desc in reversed(order_specs):
+                col_type = col_types[col_idx] if col_idx < len(col_types) else ''
+
+                if col_type and ('INT' in col_type.upper() or 'DECIMAL' in col_type.upper() or
+                                 'FLOAT' in col_type.upper() or 'DOUBLE' in col_type.upper()):
+                    def get_numeric_value(value):
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            return 0
+
+                    result.sort(key=lambda row: get_numeric_value(row[col_idx]), reverse=is_desc)
+                else:
+                    result.sort(key=lambda row: str(row[col_idx]).lower(), reverse=is_desc)
+
+        return result
+
+    def format_result(self, result, col_types):
+        """格式化结果，根据列类型转换数据"""
         formatted_result = []
+
         for row in result:
             formatted_row = []
             for i, value in enumerate(row):
-                type_str = col_types[i]
-                if 'INT' in type_str.upper():
-                    # 整数类型转换为int
-                    try:
-                        formatted_row.append(int(value))
-                    except (ValueError, TypeError):
-                        formatted_row.append(value)  # 如果无法转换，保持原样
-                elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
-                    # 浮点数类型转换为float
-                    try:
-                        formatted_row.append(float(value))
-                    except (ValueError, TypeError):
-                        formatted_row.append(value)  # 如果无法转换，保持原样
+                if i < len(col_types):
+                    type_str = col_types[i]
+                    if 'INT' in type_str.upper():
+                        try:
+                            formatted_row.append(int(value))
+                        except (ValueError, TypeError):
+                            formatted_row.append(value)
+                    elif 'DECIMAL' in type_str.upper() or 'FLOAT' in type_str.upper() or 'DOUBLE' in type_str.upper():
+                        try:
+                            formatted_row.append(float(value))
+                        except (ValueError, TypeError):
+                            formatted_row.append(value)
+                    else:
+                        formatted_row.append(value)
                 else:
-                    # 字符串类型保持原样
                     formatted_row.append(value)
             formatted_result.append(formatted_row)
 
@@ -319,7 +515,7 @@ class SelectOperation(BaseOperation):
 
 class UpdateOperation(BaseOperation):
     """UPDATE操作实现"""
-    
+
     def execute(self, sql):
         """解析UPDATE语句"""
         parts = sql.split('SET')
@@ -331,13 +527,13 @@ class UpdateOperation(BaseOperation):
         set_part = parts[1].split('WHERE')[0].strip()
         updates = {}
         for update in set_part.split(','):
-            col, value = update.split('=')
+            col, value = update.split('=', 1)  # 只分割第一个=
             col = col.strip()
             value = value.strip().strip("'")
             updates[col] = value
 
         col_names = list(self.tables[table_name].keys())
-        
+
         # 检查要更新的列是否存在
         for col in updates.keys():
             if col not in col_names:
@@ -370,7 +566,7 @@ class UpdateOperation(BaseOperation):
 
 class AlterTableOperation(BaseOperation):
     """ALTER TABLE操作实现"""
-    
+
     def execute(self, sql):
         """解析ALTER TABLE语句"""
         parts = sql.split()
@@ -395,14 +591,15 @@ class AlterTableOperation(BaseOperation):
                 del self.tables[table_name][col_name]
                 # 从现有数据中删除该列
                 for row in self.data[table_name]:
-                    del row[col_index]
+                    if col_index < len(row):
+                        del row[col_index]
                 return f"从表 {table_name} 删除列 {col_name} 成功"
             return f"列 {col_name} 不存在"
 
 
 class DropTableOperation(BaseOperation):
     """DROP TABLE操作实现"""
-    
+
     def execute(self, sql):
         """解析DROP TABLE语句"""
         table_name = sql.split()[2].strip()
@@ -415,8 +612,8 @@ class DropTableOperation(BaseOperation):
 
 class ShowTablesOperation(BaseOperation):
     """SHOW TABLES操作实现"""
-    
+
     def execute(self, sql):
         """解析SHOW TABLES语句"""
         # 返回列表的列表格式，每个表名作为一个单独的行
-        return [[table_name] for table_name in self.tables.keys()] 
+        return [[table_name] for table_name in self.tables.keys()]
